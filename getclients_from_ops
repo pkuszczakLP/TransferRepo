@@ -1,0 +1,86 @@
+#!/bin/bash
+#
+# Author: Raimund Sacherer (rsachere@redhat.com)
+#
+# Changes: 2024-01-31  Initial Version V1
+#
+#
+# Please note that this is not to be treated as a Red Hat official binary / software,·
+# and feel free to go though the source code to look for what's happening behind the scenes.
+#
+# SPDX-License-Identifier: MIT-0
+# MAINTAINER: rsachere@redhat.com
+
+trap 'rm -f ${TEMPFILE} ' EXIT
+
+SESSION=""
+OPS_IN_FLIGHT=""
+TEMPFILE=$(mktemp)
+
+for i in "$@" ; do
+	case $i in
+		--session-ls=*)
+			SESSION="${i#*=}"
+			shift
+			;;
+
+		--ops-in-flight=*)
+			OPS_IN_FLIGHT="${i#*=}"
+			shift
+			;;
+
+		-h|--help)
+			echo "$0 [-h|--help] --session-ls=<file> --ops-in-flight=<file>"
+	                echo
+			echo " ********************************************************************************************"
+			echo "  Pleasese note that this is not to be treated as a Red Hat official binary / software,      "
+			echo "  and feel free to go though the source code to look for what's happening behind the scenes. "
+			echo " ********************************************************************************************"
+			echo
+			echo "  --session-ls=FILEPATH         <FILEPATH> file of MDS session ls output."
+			echo "  --ops-in-flight=FILEPATH      <FILEPATH> file of MDS dump_ops_in_flight output."
+			echo "  --help|-h                     This help screen."
+			echo
+
+			shift
+			exit 0
+			;;
+		*)
+			echo "Command option ${i} unknown." >&2
+			echo
+			${0} --help
+			exit 66
+			;;
+	esac
+done
+
+for program in jq mktemp ; do
+	which ${program} > /dev/null 2>&1
+	
+	if [ ! $? -eq 0 ] ; then
+		echo "Please install program `${program}`."
+		exit 65
+	fi
+done
+
+if [ -z "${SESSION}" -o ! -f "${SESSION}" ] ; then
+	echo
+	echo "ERR: Please provide a valid session file."
+	echo
+	${0} --help
+	exit 67
+fi
+
+if [ -z "${OPS_IN_FLIGHT}" -o ! -f "${OPS_IN_FLIGHT}" ] ; then
+	echo
+	echo "ERR: Please provide a valid ops-in-flight file."
+	echo
+	${0} --help
+	exit 68
+fi
+
+cat "${SESSION}" | jq -r --argjson clients "[$(cat "${OPS_IN_FLIGHT}" | jq -r '.ops | sort_by(.duration)[] | select( .duration > 10 ) | ["" + .type_data.client_info.client + ""] | @tsv' | sed -e 's/client\.//g' | sort | uniq | paste -s -d ",")]"  '.[] | select(.id as $id | $clients | index($id)) | [ .id, .client_metadata.hostname, .client_metadata.root, .requests_in_flight, .num_caps] | @tsv' > ${TEMPFILE}
+
+echo -e "id\thostname\tpath\tops\tcaps" | cat - ${TEMPFILE} | column -t -s $'\t'
+
+
